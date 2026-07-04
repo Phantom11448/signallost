@@ -1,0 +1,52 @@
+export const codexAccessibility = {
+  id: "accessibility",
+  entries: [
+    {
+      id: "labels-descriptions",
+      title: "Labels & Descriptions",
+      intro: "Ways to give assistive technology a name or description for something, beyond just aria-label and alt.",
+      items: [
+        { code: "aria-label=\"...\"", label: "provides an invisible accessible name for an element" },
+        { code: "aria-labelledby=\"id\"", label: "points to another element on the page to use as the name" },
+        { code: "aria-describedby=\"id\"", label: "points to another element with extra descriptive text" },
+        { code: "alt=\"\"", label: "marks an image as decorative — screen readers skip it" },
+        { code: "aria-hidden=\"true\"", label: "hides any element from screen readers while staying visible" },
+        { code: "role=\"img\"", label: "tells assistive tech to treat an element (like an svg) as an image" },
+        { code: "title=\"...\"", label: "a tooltip, also read by some screen readers as extra context" },
+        { code: "lang=\"en\"", label: "declares the language of the page or an element, affects pronunciation" },
+        { code: "aria-live=\"polite\"", label: "announces content changes without interrupting the user" },
+        { code: "aria-live=\"assertive\"", label: "announces content changes immediately, interrupting the user" },
+      ],
+    },
+    {
+      id: "interactive-states",
+      title: "Interactive State Attributes",
+      intro: "Attributes that tell assistive technology the current state of something interactive — whether it's open, selected, pressed, or valid.",
+      items: [
+        { code: "aria-expanded=\"true\"", label: "tells screen readers whether a collapsible section is open" },
+        { code: "aria-controls=\"id\"", label: "links a control to the element it expands or affects" },
+        { code: "aria-pressed=\"true\"", label: "marks a toggle button as currently active" },
+        { code: "aria-checked=\"true\"", label: "marks a custom checkbox or radio as selected" },
+        { code: "aria-selected=\"true\"", label: "marks an item as selected within a list or tab set" },
+        { code: "aria-current=\"page\"", label: "marks the current page in a set of navigation links" },
+        { code: "aria-disabled=\"true\"", label: "marks an element as disabled without removing it from the tab order" },
+        { code: "aria-required=\"true\"", label: "marks a form field as required, for assistive tech" },
+        { code: "aria-invalid=\"true\"", label: "marks a form field as currently failing validation" },
+      ],
+    },
+    {
+      id: "keyboard-navigation",
+      title: "Keyboard & Focus",
+      intro: "Not everyone uses a mouse or touchscreen — these control how a page behaves for keyboard-only navigation.",
+      items: [
+        { code: "tabindex=\"0\"", label: "makes a non-interactive element (like a div) reachable by keyboard" },
+        { code: "tabindex=\"-1\"", label: "makes an element focusable by code, but skipped in normal tab order" },
+        { code: "role=\"button\"", label: "tells assistive tech a non-button element behaves like one" },
+        { code: "role=\"navigation\"", label: "identifies a region as page navigation" },
+        { code: "role=\"alert\"", label: "identifies content as an important, time-sensitive message" },
+        { code: "<a href=\"#main-content\">", label: "a 'skip to content' link, common as the very first focusable item" },
+        { code: ":focus-visible", label: "a CSS selector for styling focus only for keyboard users" },
+      ],
+    },
+  ],
+};

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import UfoBurst from "../UI/Celebration";
 
 const C = {
   bg: "#020b18",
@@ -25,23 +26,37 @@ const FONTS = {
   mono: "'Share Tech Mono', monospace",
 };
 
-const MIN_REPS = 3;
-
 // ── LIVE PREVIEW ──────────────────────────────────────────────
-function LivePreview({ html }) {
+function LivePreview({ html, glow = false }) {
   const iframeRef = useRef(null);
+  const isMediaHeavy = /<video|<audio|<img/i.test(String(html ?? ""));
   useEffect(() => {
     if (!iframeRef.current) return;
     const doc = iframeRef.current.contentDocument;
     if (!doc) return;
     try {
+      const previewHtml = String(html ?? "")
+        .replace(/src="crashsite\.jpg"/gi, 'src="/StarBurnerpic.png"')
+        .replace(/src="crash-site\.jpg"/gi, 'src="/StarBurnerpic.png"')
+        .replace(/src="crashsite\.mp4"/gi, 'src="/Crashsitecomp.mp4"')
+        .replace(/src="crashsite\.webm"/gi, 'src="/Crashsitecomp.mp4"')
+        .replace(/src="repair\.webm"/gi, 'src="/repair.mp4"')
+        .replace(/src="alien\.jpg"/gi, 'src="/newzhan.png"')
+        .replace(/src="crew\.jpg"/gi, 'src="/begin.png"')
+        .replace(/src="photo\.jpg"/gi, 'src="/StarBurnerpic.png"')
+        .replace(/src="rescue\.jpg"/gi, 'src="/StarBurnerpic.png"');
       doc.open();
       doc.write(`<html><head><style>
-        body{font-family:system-ui,sans-serif;padding:12px;color:#1a1828;background:#f0fff8;margin:0;}
+        html,body{height:100%;margin:0;}
+        body{font-family:system-ui,sans-serif;padding:12px;color:#1a1828;background:#f0fff8;box-sizing:border-box;}
         h1,h2,h3,h4,h5,h6{margin:0 0 6px;color:#020b18;}
         p{margin:0 0 6px;}a{color:#7c5cfc;}
-        img{max-width:100%;height:auto;}
-      </style></head><body>${html}</body></html>`);
+        img{max-width:100%;max-height:100%;object-fit:contain;display:block;margin:0 auto;}
+        video{max-width:100%;}
+        table{border-collapse:collapse;margin:8px 0;}
+        th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;}
+        th{background:#e8f5f0;}
+      </style></head><body>${previewHtml}</body></html>`);
       doc.close();
     } catch (e) {}
   }, [html]);
@@ -51,7 +66,13 @@ function LivePreview({ html }) {
       <iframe
         ref={iframeRef}
         title="preview"
-        style={{ width: "100%", height: 100, border: `1px solid ${C.accent}44`, borderRadius: 8, background: "#f0fff8" }}
+        style={{
+          width: "100%", height: isMediaHeavy ? 220 : 100,
+          border: glow ? "2px solid #4da6ff" : `1px solid ${C.accent}44`,
+          borderRadius: 8, background: "#f0fff8",
+          boxShadow: glow ? "0 0 16px #4da6ff88" : "none",
+          transition: "all 0.3s ease",
+        }}
         sandbox="allow-same-origin"
       />
     </div>
@@ -109,19 +130,154 @@ function TagAnatomy({ parts }) {
 }
 
 // ── CHALLENGE CARD ────────────────────────────────────────────
-function ChallengeCard({ challenge, onPass, alreadyDone }) {
+const KNOWN_TAGS = ["h1","h2","h3","h4","h5","h6","p","img","ul","ol","li","button","div","span","strong","em","br","small","blockquote"];
+const TAG_SYNONYMS = { paragraph: "p", paragraphs: "p", link: "a", links: "a", image: "img", images: "img", picture: "img", article: "article", articles: "article" };
+
+const INVISIBLE_TAG_NAMES = new Set(["head", "title", "meta", "link", "style", "script", "base", "doctype", "form", "table", "tr", "td"]);
+const VOID_INVISIBLE_TAGS = new Set(["meta", "link", "base", "doctype"]);
+
+function extractOpeningTagNames(str) {
+  // Only matches opening tags (and <!DOCTYPE>) — never closing tags — and preserves
+  // duplicates, so a hint requiring two separate <meta> tags is treated as two distinct
+  // requirements instead of collapsing into one.
+  const names = [];
+  const re = /<(?!\/)!?\s*([a-zA-Z][a-zA-Z0-9]*)/g;
+  let m;
+  while ((m = re.exec(str)) !== null) {
+    names.push(m[1].toLowerCase());
+  }
+  return names;
+}
+
+function getRequiredInvisibleTags(hint) {
+  if (!hint) return [];
+  return extractOpeningTagNames(hint).filter(name => INVISIBLE_TAG_NAMES.has(name));
+}
+
+function countTagInstancesTyped(val, tagName, requiredCount) {
+  if (tagName === "doctype") return /<!DOCTYPE\s+html>/i.test(val) ? 1 : 0;
+  if (VOID_INVISIBLE_TAGS.has(tagName)) {
+    // Void tags (meta, link, base) have no closing tag — count how many fully-closed
+    // instances exist (the ">" must actually be typed), capped at how many are required.
+    const openRe = new RegExp(`<${tagName}(\\s[^>]*)?>`, "gi");
+    return Math.min((val.match(openRe) || []).length, requiredCount);
+  }
+  // Non-void tags (head, title, style, script) require both the opening AND closing tag
+  // to be fully typed before counting as complete.
+  const openRe = new RegExp(`<${tagName}(\\s[^>]*)?>`, "i");
+  const closeRe = new RegExp(`</${tagName}>`, "i");
+  return openRe.test(val) && closeRe.test(val) ? 1 : 0;
+}
+
+function buildPeriodVariants(str) {
+  // Finds every spot immediately before a closing tag (or the very end of the whole
+  // string, ignoring trailing whitespace) and generates every combination of
+  // "period present / period absent" at just those spots. Never touches periods
+  // anywhere else in the text (mid-sentence, inside quotes, etc.), so this can never
+  // break a check that requires specific wording elsewhere.
+  const positions = [];
+  const tagRegex = /<\/[a-zA-Z][a-zA-Z0-9]*>/g;
+  let m;
+  while ((m = tagRegex.exec(str)) !== null) {
+    positions.push(m.index);
+  }
+  const trimmedEnd = str.replace(/\s+$/, "").length;
+  if (!positions.includes(trimmedEnd)) positions.push(trimmedEnd);
+
+  const uniquePositions = [...new Set(positions)].sort((a, b) => b - a);
+  const variants = new Set([str]);
+  const total = uniquePositions.length;
+  const maxCombos = Math.min(64, 2 ** total);
+
+  for (let combo = 0; combo < maxCombos; combo++) {
+    let candidate = str;
+    for (let i = 0; i < total; i++) {
+      const pos = uniquePositions[i];
+      const wantPeriod = (combo >> i) & 1;
+      const hasPeriod = candidate[pos - 1] === ".";
+      if (wantPeriod && !hasPeriod) {
+        candidate = candidate.slice(0, pos) + "." + candidate.slice(pos);
+      } else if (!wantPeriod && hasPeriod) {
+        candidate = candidate.slice(0, pos - 1) + candidate.slice(pos);
+      }
+    }
+    variants.add(candidate);
+  }
+  return [...variants];
+}
+
+function renderWithTagHighlights(text, relevantTags = [], entityHighlight = false) {
+  if (!text) return text;
+  const entityPattern = /(&[a-zA-Z0-9#]+;|property: value;|\bselector\b|\bh1\b)/g;
+
+  // Split on backtick segments (literal required strings, rendered as blue chips)
+  const backtickParts = text.split(/(`[^`]+`)/g);
+  return backtickParts.map((part, i) => {
+    if (part.startsWith("`") && part.endsWith("`")) {
+      const inner = part.slice(1, -1);
+      return (
+        <span key={`bt-${i}`} style={{
+          fontFamily: FONTS.mono,
+          color: C.alien,
+          fontWeight: 700,
+          fontSize: "1.1em",
+        }}>{inner}</span>
+      );
+    }
+
+    // For non-backtick segments, preserve existing entity-highlight behavior.
+    const entityParts = entityHighlight ? part.split(entityPattern) : [part];
+    return entityParts.flatMap((entityPart, entityIdx) => {
+      // When entityHighlight is enabled, treat entities and selected syntax tokens
+      // as blue-highlighted references (and keep them out of green tag highlighting).
+      if (entityHighlight && (/^&[a-zA-Z0-9#]+;$/.test(entityPart) || entityPart === "property: value;" || entityPart === "selector" || entityPart === "h1")) {
+        return (
+          <span key={`ent-${i}-${entityIdx}`} style={{ color: "#4da6ff", fontSize: "1.08em", fontWeight: 600 }}>{entityPart}</span>
+        );
+      }
+
+      return entityPart;
+    });
+  });
+}
+
+function ChallengeCard({ challenge, onPass, alreadyDone, onFirstPass }) {
   const [val, setVal] = useState("");
   const [status, setStatus] = useState(alreadyDone ? "pass" : "idle");
   const [attempts, setAttempts] = useState(0);
   const [feedback, setFeedback] = useState("");
   const [showHint, setShowHint] = useState(false);
+  const requiredInvisibleTags = getRequiredInvisibleTags(challenge.hint);
+  const invisibleProgress = requiredInvisibleTags.length && status !== "pass"
+    ? (() => {
+        const requiredCounts = {};
+        requiredInvisibleTags.forEach(name => { requiredCounts[name] = (requiredCounts[name] || 0) + 1; });
+        let satisfied = 0;
+        Object.keys(requiredCounts).forEach(name => {
+          satisfied += countTagInstancesTyped(val, name, requiredCounts[name]);
+        });
+        return satisfied / requiredInvisibleTags.length;
+      })()
+    : 0;
+  const previewPassing = status === "pass" || challenge.check(val) === "pass" || buildPeriodVariants(val).some(v => v !== val && challenge.check(v) === "pass");
 
   const check = () => {
-    const result = challenge.check(val);
+    let result = challenge.check(val);
+    if (result !== "pass") {
+      for (const variant of buildPeriodVariants(val)) {
+        if (variant !== val && challenge.check(variant) === "pass") {
+          result = "pass";
+          break;
+        }
+      }
+    }
     if (result === "pass") {
       setStatus("pass");
       setFeedback("");
-      if (!alreadyDone) onPass();
+      if (!alreadyDone) {
+        onPass();
+        if (onFirstPass) onFirstPass();
+      }
     } else {
       setStatus("fail");
       setAttempts(a => a + 1);
@@ -137,13 +293,13 @@ function ChallengeCard({ challenge, onPass, alreadyDone }) {
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <div style={{ color: C.red, fontSize: 12, fontWeight: 800, letterSpacing: 2, fontFamily: FONTS.heading }}>REQUIRED REPAIR</div>
-        <button onClick={() => { setVal(""); setStatus("idle"); setFeedback(""); setAttempts(0); setShowHint(false); }}
+        <button onClick={() => { setStatus("idle"); setFeedback(""); setAttempts(0); setShowHint(false); }}
           style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: "50%", width: 26, height: 26, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>↺</button>
       </div>
       <div style={{ color: C.accent, fontSize: 10, textTransform: "uppercase", letterSpacing: 2, marginBottom: 12 }}>⚡ Complete this to advance</div>
 
       <p style={{ color: C.textPrimary, fontSize: 14, fontWeight: 600, lineHeight: 1.6, margin: "0 0 12px" }}>
-        {challenge.instruction}
+        {renderWithTagHighlights(challenge.instruction, challenge.relevantTags, challenge.entityHighlight)}
       </p>
 
       <textarea
@@ -162,15 +318,32 @@ function ChallengeCard({ challenge, onPass, alreadyDone }) {
         disabled={status === "pass"}
         style={{
           width: "100%", boxSizing: "border-box", height: 80,
-          background: C.tagBg, color: C.tagText,
-          border: `1px solid ${C.accent}44`, borderRadius: 8,
+          background: invisibleProgress > 0 ? `rgba(77,166,255,${(0.14 * invisibleProgress).toFixed(2)})` : C.tagBg, color: C.tagText,
+          border: invisibleProgress > 0 ? `2px solid rgba(77,166,255,${(0.35 + 0.65 * invisibleProgress).toFixed(2)})` : `1px solid ${C.accent}44`,
+          boxShadow: invisibleProgress > 0 ? `0 0 ${Math.round(6 + 12 * invisibleProgress)}px rgba(77,166,255,${(0.25 + 0.55 * invisibleProgress).toFixed(2)})` : "none",
+          borderRadius: 8,
           padding: "10px 12px", fontFamily: FONTS.mono,
           fontSize: 13, resize: "vertical", outline: "none",
           marginBottom: 10, lineHeight: 1.6,
+          transition: "all 0.3s ease",
         }}
       />
 
-      <LivePreview html={val} />
+      {!challenge.invisibleOutput && <LivePreview html={val} glow={previewPassing} />}
+
+      {challenge.invisibleOutput && status === "pass" && (
+        <div style={{
+          marginTop: 8,
+          background: C.alienDim,
+          border: `1px solid ${C.alien}44`,
+          borderRadius: 8,
+          padding: "10px 12px",
+        }}>
+          <p style={{ color: C.alien, margin: 0, fontSize: 13, fontStyle: "italic", lineHeight: 1.5 }}>
+            📡 "Header data accepted. Not visible on the page. Phantar can read it. You cannot. This is apparently normal."
+          </p>
+        </div>
+      )}
 
       {status === "fail" && feedback && (
         <div style={{ background: C.redDim, border: `1px solid ${C.red}44`, borderRadius: 8, padding: "8px 12px", margin: "10px 0" }}>
@@ -190,15 +363,13 @@ function ChallengeCard({ challenge, onPass, alreadyDone }) {
 
       {showHint && (
         <div style={{ background: C.goldDim, border: `1px solid ${C.gold}44`, borderRadius: 8, padding: "8px 12px", marginBottom: 10 }}>
-          <p style={{ color: C.gold, margin: 0, fontSize: 13, fontFamily: FONTS.mono, whiteSpace: "pre-wrap" }}>{challenge.hint}</p>
+          <p style={{ color: C.gold, margin: 0, fontSize: 13, fontFamily: FONTS.mono, whiteSpace: "pre-wrap" }}>{renderWithTagHighlights(challenge.hint, challenge.relevantTags, challenge.entityHighlight)}</p>
         </div>
       )}
 
       {status === "pass" ? (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
           <p style={{ color: C.alien, margin: 0, fontWeight: 700, fontSize: 14 }}>✓ Signal confirmed! Transmission accepted by Phantar validator.</p>
-          <button onClick={() => { setVal(""); setStatus("idle"); setFeedback(""); setAttempts(0); setShowHint(false); }}
-            style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: "50%", width: 26, height: 26, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, flexShrink: 0, marginLeft: 8 }}>↺</button>
         </div>
       ) : (
         <button onClick={check} style={{
@@ -215,27 +386,83 @@ function ChallengeCard({ challenge, onPass, alreadyDone }) {
 // ── DRILL ZONE ────────────────────────────────────────────────
 function DrillZone({ drills, challengeId, onReady }) {
   const [current, setCurrent] = useState(0);
-  const [val, setVal] = useState("");
-  const [status, setStatus] = useState("idle");
+  const [answers, setAnswers] = useState(() => Array((drills || []).length).fill(""));
+  const [statuses, setStatuses] = useState(() => Array((drills || []).length).fill("idle"));
   const [reps, setReps] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
 
   if (!drills || !drills.length) return null;
 
-  const drill = drills[current % drills.length];
-  const boosted = reps >= MIN_REPS;
+  const requiredReps = drills.length;
+  const drill = drills[current];
+  const boosted = reps >= requiredReps;
+  const val = answers[current] || "";
+  const status = statuses[current] || "idle";
+  const requiredInvisibleTags = getRequiredInvisibleTags(drill.answer);
+  const invisibleProgress = requiredInvisibleTags.length && status !== "pass"
+    ? (() => {
+        const requiredCounts = {};
+        requiredInvisibleTags.forEach(name => { requiredCounts[name] = (requiredCounts[name] || 0) + 1; });
+        let satisfied = 0;
+        Object.keys(requiredCounts).forEach(name => {
+          satisfied += countTagInstancesTyped(val, name, requiredCounts[name]);
+        });
+        return satisfied / requiredInvisibleTags.length;
+      })()
+    : 0;
+
+  const setVal = (newVal) => {
+    setAnswers(prev => {
+      const copy = [...prev];
+      copy[current] = newVal;
+      return copy;
+    });
+  };
+
+  const setStatus = (newStatus) => {
+    setStatuses(prev => {
+      const copy = [...prev];
+      copy[current] = newStatus;
+      return copy;
+    });
+  };
 
   const check = () => {
-    if (drill.check(val.toLowerCase())) {
+    const lower = val.toLowerCase();
+    let passed = drill.check(lower);
+    if (!passed) {
+      for (const variant of buildPeriodVariants(lower)) {
+        if (variant !== lower && drill.check(variant)) {
+          passed = true;
+          break;
+        }
+      }
+    }
+    if (passed) {
+      const wasAlreadyPass = status === "pass";
       setStatus("pass");
-      setReps(r => r + 1);
+      if (!wasAlreadyPass && !boosted) setReps(r => r + 1);
     } else {
       setStatus("fail");
     }
   };
 
   const next = () => {
-    setCurrent(c => c + 1);
+    setCurrent(c => (c + 1) % drills.length);
+    setShowAnswer(false);
+  };
+
+  const goDrillPrev = () => {
+    setCurrent(c => (c - 1 + drills.length) % drills.length);
+    setShowAnswer(false);
+  };
+
+  const goDrillNext = () => {
+    setCurrent(c => (c + 1) % drills.length);
+    setShowAnswer(false);
+  };
+
+  const resetDrill = () => {
     setVal("");
     setStatus("idle");
     setShowAnswer(false);
@@ -249,7 +476,7 @@ function DrillZone({ drills, challengeId, onReady }) {
           <div style={{ color: C.accent, fontSize: 10, textTransform: "uppercase", letterSpacing: 2, marginTop: 2 }}>📡 Transmit variations to boost signal strength</div>
         </div>
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          {Array.from({ length: MIN_REPS }).map((_, i) => (
+          {Array.from({ length: requiredReps }).map((_, i) => (
             <div key={i} style={{
               width: 10, height: 10, borderRadius: "50%",
               background: i < reps ? C.alien : C.border,
@@ -257,13 +484,13 @@ function DrillZone({ drills, challengeId, onReady }) {
               transition: "all 0.3s",
             }} />
           ))}
-          <span style={{ color: C.textMuted, fontSize: 11, marginLeft: 4 }}>{reps}/{MIN_REPS}</span>
+          <span style={{ color: C.textMuted, fontSize: 11, marginLeft: 4 }}>{reps}/{requiredReps}</span>
         </div>
       </div>
 
       <div style={{ background: C.card, borderRadius: 99, height: 6, overflow: "hidden", marginBottom: 12 }}>
         <div style={{
-          width: `${Math.min((reps / MIN_REPS) * 100, 100)}%`,
+          width: `${Math.min((reps / requiredReps) * 100, 100)}%`,
           height: "100%",
           background: `linear-gradient(90deg, ${C.accent}, ${C.alien})`,
           borderRadius: 99, transition: "width 0.5s ease",
@@ -271,21 +498,45 @@ function DrillZone({ drills, challengeId, onReady }) {
         }} />
       </div>
 
+      {boosted && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, background: C.card, border: `1px solid ${C.accent}22`, borderRadius: 8, padding: "6px 10px" }}>
+          <button onClick={goDrillPrev} style={{
+            background: "transparent", border: `1px solid ${C.border}`, color: C.textPrimary,
+            borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer",
+          }}>← Prev drill</button>
+          <span style={{ color: C.textMuted, fontSize: 11 }}>Drill {current + 1} of {drills.length}</span>
+          <button onClick={goDrillNext} style={{
+            background: "transparent", border: `1px solid ${C.border}`, color: C.textPrimary,
+            borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer",
+          }}>Next drill →</button>
+        </div>
+      )}
+
       <div style={{ background: C.card, border: `1px solid ${C.accent}22`, borderRadius: 8, padding: "8px 12px", marginBottom: 12 }}>
         <p style={{ color: C.textMuted, fontSize: 12, margin: 0, fontStyle: "italic", lineHeight: 1.5 }}>
           {boosted
             ? '"Signal strength sufficient. Phantar can locate us. Though I would feel better with a stronger signal. I always feel better with a stronger signal."'
             : reps === 0
             ? '"Phantar says my signal is too weak to pinpoint our location. I need to transmit more variations. Of course I do."'
-            : `"${reps} transmission${reps > 1 ? "s" : ""} sent. Signal getting stronger. The cow came back. I am ignoring the cow."`
+            : `"${reps} transmission${reps > 1 ? "s" : ""} sent. Signal getting stronger."`
           }
           <span style={{ color: C.accent, fontSize: 11, display: "block", marginTop: 4 }}>— Zhan</span>
         </p>
       </div>
 
-      <p style={{ color: C.textPrimary, fontSize: 14, fontWeight: 600, margin: "0 0 10px", lineHeight: 1.5 }}>
-        {drill.instruction}
-      </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+        <p style={{ color: C.textPrimary, fontSize: 14, fontWeight: 600, margin: 0, lineHeight: 1.5, flex: 1 }}>
+          {renderWithTagHighlights(drill.instruction, drill.relevantTags, drill.entityHighlight)}
+        </p>
+        {boosted && (
+          <button onClick={resetDrill} title="Reset this drill" style={{
+            background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted,
+            borderRadius: "50%", width: 26, height: 26, fontSize: 13, cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+            marginLeft: 8, flexShrink: 0,
+          }}>↺</button>
+        )}
+      </div>
 
       <textarea
         value={val}
@@ -300,18 +551,24 @@ function DrillZone({ drills, challengeId, onReady }) {
           }
         }}
         placeholder="// practice here..."
-        disabled={status === "pass"}
+        disabled={status === "pass" && !boosted}
         style={{
           width: "100%", boxSizing: "border-box", height: 68,
-          background: C.tagBg, color: C.tagText,
-          border: `1px solid ${C.accent}33`, borderRadius: 8,
+          background: invisibleProgress > 0 ? `rgba(77,166,255,${(0.14 * invisibleProgress).toFixed(2)})` : C.tagBg, color: C.tagText,
+          border: invisibleProgress > 0 ? `2px solid rgba(77,166,255,${(0.35 + 0.65 * invisibleProgress).toFixed(2)})` : `1px solid ${C.accent}33`,
+          boxShadow: invisibleProgress > 0 ? `0 0 ${Math.round(6 + 12 * invisibleProgress)}px rgba(77,166,255,${(0.25 + 0.55 * invisibleProgress).toFixed(2)})` : "none",
+          borderRadius: 8,
           padding: "8px 12px", fontFamily: FONTS.mono,
           fontSize: 13, resize: "vertical", outline: "none",
           lineHeight: 1.6, marginBottom: 8,
+          transition: "all 0.3s ease",
         }}
       />
 
-      <LivePreview html={val} />
+      <LivePreview html={val} glow={(() => {
+        const lower = val.toLowerCase();
+        return status === "pass" || Boolean(drill.check(lower)) || buildPeriodVariants(lower).some(v => v !== lower && drill.check(v));
+      })()} />
 
       {status === "fail" && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "8px 0" }}>
@@ -333,11 +590,13 @@ function DrillZone({ drills, challengeId, onReady }) {
       {status === "pass" ? (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
           <p style={{ color: C.alien, margin: 0, fontWeight: 700, fontSize: 13 }}>✓ Transmission sent! +1 signal boost</p>
-          <button onClick={next} style={{
-            background: C.accent, color: C.bg, border: "none",
-            borderRadius: 7, padding: "6px 16px", fontSize: 12,
-            fontWeight: 700, cursor: "pointer",
-          }}>{current + 1 < drills.length ? "Next drill →" : "Again →"}</button>
+          {!boosted && (
+            <button onClick={next} style={{
+              background: C.accent, color: C.bg, border: "none",
+              borderRadius: 7, padding: "6px 16px", fontSize: 12,
+              fontWeight: 700, cursor: "pointer",
+            }}>{current + 1 < drills.length ? "Next drill →" : "Finish set →"}</button>
+          )}
         </div>
       ) : (
         <button onClick={check} style={{
@@ -367,25 +626,130 @@ function DrillZone({ drills, challengeId, onReady }) {
 }
 
 // ── ZHAN COMMENT ─────────────────────────────────────────────
-function ZhanComment({ text }) {
+function ZhanComment({ text, mood = "confused" }) {
+  const moodImages = {
+    confused: "/newzhan.png",
+    annoyed: "/newzhan.png",
+    glad: "/newzhan.png",
+    night: "/newzhan.png",
+  };
+
   return (
     <div style={{
       background: C.accentDim,
-      border: `1px solid ${C.accent}33`,
+      border: "1px solid #00f5c433",
       borderRadius: 10, padding: "10px 14px",
       marginTop: 12, display: "flex", gap: 10, alignItems: "flex-start",
     }}>
-      <img src="/Zhanpic.png" style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", objectPosition: "top", flexShrink: 0, border: `1px solid ${C.accent}` }} />
-      <p style={{ color: C.accent, fontSize: 13, margin: 0, lineHeight: 1.6, fontStyle: "italic" }}>"{text}"</p>
+      <img src={moodImages[mood] || "/newzhan.png"} style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", objectPosition: "top", flexShrink: 0, border: "1px solid #00f5c4" }} />
+      <p style={{ color: "#00f5c4", fontSize: 13, margin: 0, lineHeight: 1.6, fontStyle: "italic" }}>"{text}"</p>
+    </div>
+  );
+}
+
+const CHARACTER_IMAGES = {
+  zhan: "/newzhan.png",
+  wooch: "/wooch.png",
+  luvek: "/luvek.png",
+};
+
+function DialogueExchange({ lines }) {
+  // lines: array of { speaker: "zhan" | "wooch" | "luvek", name: string, text: string }
+  return (
+    <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+      {lines.map((line, i) => (
+        <div key={i} style={{
+          background: C.accentDim,
+          border: "1px solid #00f5c433",
+          borderRadius: 10, padding: "10px 14px",
+          display: "flex", gap: 10, alignItems: "flex-start",
+        }}>
+          <img
+            src={CHARACTER_IMAGES[line.speaker] || "/newzhan.png"}
+            style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", objectPosition: "top", flexShrink: 0, border: "1px solid #00f5c4" }}
+          />
+          <div>
+            <p style={{ color: "#00f5c4", fontSize: 11, margin: "0 0 2px", fontWeight: 700, fontFamily: FONTS.mono, letterSpacing: 1 }}>{line.name}</p>
+            <p style={{ color: "#00f5c4", fontSize: 13, margin: 0, lineHeight: 1.6, fontStyle: "italic" }}>
+              "{line.text}"
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TwoSidedDialogue({ lines }) {
+  // lines: array of { speaker: "zhan" | "wooch" | "luvek", name: string, text: string }
+  // Determine the two distinct speakers present, in order of first appearance
+  const speakers = [];
+  lines.forEach(l => { if (!speakers.includes(l.speaker)) speakers.push(l.speaker); });
+  const leftSpeaker = speakers[0];
+  const rightSpeaker = speakers[1] || speakers[0];
+
+  return (
+    <div style={{
+      marginTop: 12,
+      background: C.accentDim,
+      border: "1px solid #00f5c433",
+      borderRadius: 10,
+      padding: "12px 14px",
+      display: "flex",
+      alignItems: "stretch",
+      gap: 10,
+    }}>
+      <img
+        src={CHARACTER_IMAGES[leftSpeaker] || "/zhanconfused.png"}
+        style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", objectPosition: "top", flexShrink: 0, border: "1px solid #00f5c4", alignSelf: "flex-start" }}
+      />
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+        {lines.map((line, i) => {
+          const isRight = line.speaker === rightSpeaker && rightSpeaker !== leftSpeaker;
+          return (
+            <div key={i} style={{ textAlign: isRight ? "right" : "left" }}>
+              <p style={{ color: "#00f5c4", fontSize: 10, margin: "0 0 2px", fontWeight: 700, fontFamily: FONTS.mono, letterSpacing: 1 }}>{line.name}</p>
+              <p style={{ color: "#00f5c4", fontSize: 13, margin: 0, lineHeight: 1.5, fontStyle: "italic" }}>"{line.text}"</p>
+            </div>
+          );
+        })}
+      </div>
+      <img
+        src={CHARACTER_IMAGES[rightSpeaker] || "/wooch.png"}
+        style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", objectPosition: "top", flexShrink: 0, border: "1px solid #00f5c4", alignSelf: "flex-start" }}
+      />
     </div>
   );
 }
 
 // ── MISSION SCREEN ────────────────────────────────────────────
-export default function MissionScreen({ mission, onBack, onComplete, completedChallenges = [], onChallengePass }) {
+export default function MissionScreen({ mission, onBack, onComplete, onNext, completedChallenges = [], onChallengePass, onOpenCodex }) {
   const [phase, setPhase] = useState("story"); // story | slides | boss
   const [slideIndex, setSlideIndex] = useState(0);
   const containerRef = useRef(null);
+
+  useEffect(() => {
+    const alreadyCompletedAny = mission.slides.some(s => s.challenge && completedChallenges.includes(s.challenge.id));
+    if (!alreadyCompletedAny) {
+      setPhase("story");
+      setSlideIndex(0);
+      return;
+    }
+    const firstIncompleteIndex = mission.slides.findIndex(s => !s.challenge || !completedChallenges.includes(s.challenge.id));
+    if (firstIncompleteIndex === -1) {
+      setPhase("boss");
+    } else {
+      setPhase("slides");
+      setSlideIndex(firstIncompleteIndex);
+    }
+  }, [mission.id]);
+
+  const [showCelebration, setShowCelebration] = useState(false);
+
+  const triggerCelebration = () => {
+    setShowCelebration(true);
+    setTimeout(() => setShowCelebration(false), 1800);
+  };
 
   const scrollToTop = () => {
     setTimeout(() => {
@@ -395,6 +759,7 @@ export default function MissionScreen({ mission, onBack, onComplete, completedCh
   };
 
   const goNext = () => {
+    console.log("goNext called", slideIndex, mission.slides.length);
     if (slideIndex < mission.slides.length - 1) {
       setSlideIndex(i => i + 1);
     } else {
@@ -427,10 +792,15 @@ export default function MissionScreen({ mission, onBack, onComplete, completedCh
   if (phase === "story") {
     return (
       <div ref={containerRef} style={containerStyle}>
-        <button onClick={onBack} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13, marginBottom: 20 }}>← Ship</button>
+        {showCelebration && <UfoBurst />}
+        <button onClick={onOpenCodex} style={{ position: "fixed", top: 16, right: 16, zIndex: 150, background: C.alien, color: C.bg, border: "none", borderRadius: 20, padding: "8px 14px", fontWeight: 800, fontSize: 11, letterSpacing: 1, cursor: "pointer", fontFamily: FONTS.heading, boxShadow: `0 0 14px ${C.alien}66` }}>📖 CODEX</button>
+        <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+          <button onClick={onBack} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13 }}>← Ship</button>
+          <button onClick={() => { setPhase("slides"); setSlideIndex(mission.slides.length - 1); }} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, opacity: 0.8, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13 }}>← Review Lessons</button>
+        </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-          <img src="/Zhanpic.png" style={{ width: 56, height: 56, borderRadius: "50%", border: `2px solid ${C.accent}`, objectFit: "cover", objectPosition: "top" }} />
+          <img src="/newzhan.png" style={{ width: 56, height: 56, borderRadius: "50%", border: `2px solid ${C.accent}`, objectFit: "cover", objectPosition: "top" }} />
           <div>
             <div style={{ color: C.accent, fontSize: 10, letterSpacing: 3, fontFamily: FONTS.mono }}>MODULE {mission.id} — {mission.storyTag}</div>
             <div style={{ color: C.textPrimary, fontSize: 18, fontWeight: 700, fontFamily: FONTS.heading, letterSpacing: 1 }}>{mission.title}</div>
@@ -477,7 +847,11 @@ export default function MissionScreen({ mission, onBack, onComplete, completedCh
 
     return (
       <div ref={containerRef} style={containerStyle}>
-        <button onClick={onBack} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13, marginBottom: 20 }}>← Ship</button>
+        <button onClick={onOpenCodex} style={{ position: "fixed", top: 16, right: 16, zIndex: 150, background: C.alien, color: C.bg, border: "none", borderRadius: 20, padding: "8px 14px", fontWeight: 800, fontSize: 11, letterSpacing: 1, cursor: "pointer", fontFamily: FONTS.heading, boxShadow: `0 0 14px ${C.alien}66` }}>📖 CODEX</button>
+        <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+          <button onClick={onBack} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13 }}>← Ship</button>
+          <button onClick={() => { setPhase("slides"); setSlideIndex(mission.slides.length - 1); }} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, opacity: 0.8, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13 }}>← Review Lessons</button>
+        </div>
 
         <div style={{ background: `linear-gradient(135deg, ${C.accent}18, ${C.alien}18)`, border: `2px solid ${C.alien}`, borderRadius: 14, padding: 20, marginBottom: 20, textAlign: "center" }}>
           <div style={{ fontSize: 40, marginBottom: 8 }}>⚡</div>
@@ -485,29 +859,39 @@ export default function MissionScreen({ mission, onBack, onComplete, completedCh
           <div style={{ color: C.textPrimary, fontSize: 18, fontWeight: 800, fontFamily: FONTS.heading, letterSpacing: 1 }}>Module {mission.id} Boss Challenge</div>
         </div>
 
-        <ZhanComment text={boss.zanComment} />
+        <ZhanComment text={boss.zanComment} mood="annoyed" />
 
         <ChallengeCard
           key={boss.id}
           challenge={boss}
           alreadyDone={bossDone}
           onPass={() => onChallengePass(boss.id)}
+          onFirstPass={triggerCelebration}
         />
 
         {bossDone && (
           <div style={{ marginTop: 20 }}>
             <div style={{ background: C.alienDim, border: `1px solid ${C.alien}44`, borderRadius: 12, padding: 16, marginBottom: 16, textAlign: "center" }}>
+              <img src="/newzhan.png" style={{ width: 48, height: 48, borderRadius: "50%", objectFit: "cover", objectPosition: "top", border: `2px solid ${C.alien}`, marginBottom: 8 }} />
               <div style={{ fontSize: 32, marginBottom: 8 }}>📡</div>
               <p style={{ color: C.alien, fontWeight: 700, fontSize: 14, margin: "0 0 6px", fontFamily: FONTS.heading, letterSpacing: 1 }}>{mission.storyTag} RESTORED</p>
               <p style={{ color: C.textMuted, fontSize: 13, margin: 0 }}>{mission.completionMessage}</p>
             </div>
-            <button onClick={onComplete} style={{
-              width: "100%", background: C.alien, color: C.bg,
-              border: "none", borderRadius: 10, padding: "14px",
-              fontWeight: 800, fontSize: 13, cursor: "pointer",
-              letterSpacing: 3, fontFamily: FONTS.heading,
-              boxShadow: `0 0 20px ${C.alien}66`,
-            }}>RETURN TO SHIP 🛸</button>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => { setPhase("slides"); setSlideIndex(mission.slides.length - 1); }} style={{
+                flex: 1, background: C.surface, color: C.textPrimary,
+                border: "1px solid " + C.border, borderRadius: 10, padding: "14px",
+                fontWeight: 800, fontSize: 11, cursor: "pointer",
+                letterSpacing: 2, fontFamily: "'Orbitron', sans-serif",
+              }}>← REVIEW LESSONS</button>
+              <button onClick={onNext} style={{
+                flex: 2, background: C.alien, color: C.bg,
+                border: "none", borderRadius: 10, padding: "14px",
+                fontWeight: 800, fontSize: 13, cursor: "pointer",
+                letterSpacing: 2, fontFamily: "'Orbitron', sans-serif",
+                boxShadow: "0 0 20px #39ff1466",
+              }}>NEXT MISSION →</button>
+            </div>
           </div>
         )}
       </div>
@@ -520,6 +904,7 @@ export default function MissionScreen({ mission, onBack, onComplete, completedCh
 
   return (
     <div ref={containerRef} style={containerStyle}>
+      <button onClick={onOpenCodex} style={{ position: "fixed", top: 16, right: 16, zIndex: 150, background: C.alien, color: C.bg, border: "none", borderRadius: 20, padding: "8px 14px", fontWeight: 800, fontSize: 11, letterSpacing: 1, cursor: "pointer", fontFamily: FONTS.heading, boxShadow: `0 0 14px ${C.alien}66` }}>📖 CODEX</button>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
         <button onClick={onBack} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13 }}>← Ship</button>
         <div style={{ flex: 1 }}>
@@ -534,7 +919,7 @@ export default function MissionScreen({ mission, onBack, onComplete, completedCh
           Briefing {slideIndex + 1} of {mission.slides.length}
         </p>
         <h3 style={{ color: C.accent, margin: "0 0 12px", fontSize: 17, fontFamily: FONTS.heading, letterSpacing: 0.5 }}>{slide.heading}</h3>
-        <p style={{ color: C.textPrimary, lineHeight: 1.75, fontSize: 15, margin: 0 }}>{slide.body}</p>
+        <p style={{ color: C.textPrimary, lineHeight: 1.75, fontSize: 15, margin: 0 }}>{renderWithTagHighlights(slide.body, slide.relevantTags, slide.entityHighlight)}</p>
         {slide.anatomy && <TagAnatomy parts={slide.anatomy} />}
         {slide.codeBlock && (
           <pre style={{
@@ -548,7 +933,8 @@ export default function MissionScreen({ mission, onBack, onComplete, completedCh
       </div>
 
       {/* zhan comment */}
-      {slide.zanComment && <ZhanComment text={slide.zanComment} />}
+      {slide.dialogueExchange && <TwoSidedDialogue lines={slide.dialogueExchange} />}
+      {!slide.dialogueExchange && slide.zanComment && <ZhanComment text={slide.zanComment} mood="confused" />}
 
       {/* challenge */}
       {slide.challenge && (
@@ -570,28 +956,25 @@ export default function MissionScreen({ mission, onBack, onComplete, completedCh
         />
       )}
 
-      {/* nav — only show if no drills or challenge not done */}
-      {(!slide.drills || !completedChallenges.includes(slide.challenge?.id)) && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20 }}>
-          <button onClick={goPrev} style={{
-            background: C.surface, color: C.textPrimary,
-            border: `1px solid ${C.border}`, borderRadius: 8,
-            padding: "10px 20px", cursor: "pointer", fontSize: 13,
-          }}>← Prev</button>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20 }}>
+        <button onClick={goPrev} style={{
+          background: C.surface, color: C.textPrimary,
+          border: `1px solid ${C.border}`, borderRadius: 8,
+          padding: "10px 20px", cursor: "pointer", fontSize: 13,
+        }}>← Prev</button>
 
-          <button
-            onClick={goNext}
-            disabled={!challengeDone}
-            style={{
-              background: challengeDone ? C.accent : C.border,
-              color: challengeDone ? C.bg : C.textMuted,
-              border: "none", borderRadius: 8,
-              padding: "10px 20px", cursor: challengeDone ? "pointer" : "default",
-              fontSize: 13, fontWeight: 700,
-            }}
-          >Next →</button>
-        </div>
-      )}
+        <button
+          onClick={goNext}
+          disabled={!challengeDone}
+          style={{
+            background: challengeDone ? C.accent : C.border,
+            color: challengeDone ? C.bg : C.textMuted,
+            border: "none", borderRadius: 8,
+            padding: "10px 20px", cursor: challengeDone ? "pointer" : "default",
+            fontSize: 13, fontWeight: 700,
+          }}
+        >Next →</button>
+      </div>
     </div>
   );
 }

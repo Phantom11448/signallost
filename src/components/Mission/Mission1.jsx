@@ -33,12 +33,19 @@ function LivePreview({ html }) {
     const doc = iframeRef.current.contentDocument;
     if (!doc) return;
     try {
+      const previewHtml = String(html ?? "")
+        .replace(/src="crashsite\.jpg"/gi, 'src="/StarBurnerpic.png"')
+        .replace(/src="crash-site\.jpg"/gi, 'src="/StarBurnerpic.png"')
+        .replace(/src="alien\.jpg"/gi, 'src="/newzhan.png"')
+        .replace(/src="crew\.jpg"/gi, 'src="/newzhan.png"')
+        .replace(/src="photo\.jpg"/gi, 'src="/StarBurnerpic.png"')
+        .replace(/src="rescue\.jpg"/gi, 'src="/StarBurnerpic.png"');
       doc.open();
       doc.write(`<html><head><style>
         body{font-family:system-ui,sans-serif;padding:12px;color:#1a1828;background:#f0fff8;margin:0;}
         h1,h2,h3,h4,h5,h6{margin:0 0 6px;color:#020b18;}
         p{margin:0 0 6px;}
-      </style></head><body>${html}</body></html>`);
+      </style></head><body>${previewHtml}</body></html>`);
       doc.close();
     } catch (e) {}
   }, [html]);
@@ -561,7 +568,7 @@ export default function Mission1({ onBack, onComplete, completedChallenges = [],
         <button onClick={onBack} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 13, marginBottom: 20 }}>← Ship</button>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-          <img src="/Zhanpic.png" style={{ width: 56, height: 56, borderRadius: "50%", border: `2px solid ${C.accent}`, objectFit: "cover", objectPosition: "top" }} />
+          <img src="/newzhan.png" style={{ width: 56, height: 56, borderRadius: "50%", border: `2px solid ${C.accent}`, objectFit: "cover", objectPosition: "top" }} />
           <div>
             <div style={{ color: C.accent, fontSize: 10, letterSpacing: 3, fontFamily: FONTS.mono }}>MODULE 1 — ANTENNA MODULE</div>
             <div style={{ color: C.textPrimary, fontSize: 18, fontWeight: 700, fontFamily: FONTS.heading, letterSpacing: 1 }}>Boot the Terminal</div>

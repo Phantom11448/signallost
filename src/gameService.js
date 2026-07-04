@@ -18,9 +18,16 @@ export const loadProgress = async () => {
     const ref = doc(db, "players", id);
     const snap = await getDoc(ref);
     if (snap.exists()) {
-      return snap.data();
+      const data = snap.data();
+      return {
+        ...data,
+        completedMissions: data.completedMissions || [],
+        completedChallenges: data.completedChallenges || [],
+        completedBugs: data.completedBugs || [],
+        completedFinal: data.completedFinal || false,
+      };
     }
-    return null;
+    return { completedMissions: [], completedChallenges: [], completedBugs: [], completedFinal: false };
   } catch (e) {
     console.error("Error loading progress:", e);
     return null;
@@ -32,7 +39,13 @@ export const saveProgress = async (data) => {
   try {
     const id = getPlayerId();
     const ref = doc(db, "players", id);
-    await setDoc(ref, data, { merge: true });
+    await setDoc(ref, {
+      ...data,
+      completedMissions: data.completedMissions || [],
+      completedChallenges: data.completedChallenges || [],
+      completedBugs: data.completedBugs || [],
+      completedFinal: data.completedFinal || false,
+    }, { merge: true });
   } catch (e) {
     console.error("Error saving progress:", e);
   }
@@ -54,5 +67,19 @@ export const completeMission = async (missionId) => {
   } catch (e) {
     console.error("Error completing mission:", e);
     return [];
+  }
+};
+
+export const resetProgress = async () => {
+  try {
+    const id = getPlayerId();
+    const ref = doc(db, "players", id);
+    await setDoc(ref, {
+      completedMissions: [],
+      completedChallenges: [],
+      completedBugs: [],
+    }, { merge: true });
+  } catch (e) {
+    console.error("Error resetting progress:", e);
   }
 };
